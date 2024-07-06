@@ -1,0 +1,9 @@
+
+
+python -m venv C:\Users\Yannis\Downloads\edemm_earino\gewxwrika\proj3\venv
+.\venv\Scripts\activate
+
+
+pip install ipykernel
+
+C:\Users\Yannis\Downloads\edemm_earino\gewxwrika\proj3\venv\Scripts\python.exe -m pip install --upgrade pip
