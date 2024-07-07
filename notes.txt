@@ -1,6 +1,12 @@
 
 
 python -m venv C:\Users\Yannis\Downloads\edemm_earino\gewxwrika\proj3\venv
+python -m venv C:\Users\yanni\Downloads\gewxwrika3\venv
+
+Set-ExecutionPolicy RemoteSigned
+When you are done, you can set the policy back to its default value with:
+Set-ExecutionPolicy Restricted
+
 .\venv\Scripts\activate
 
 
