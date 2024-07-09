@@ -9,9 +9,15 @@ Set-ExecutionPolicy Restricted
 
 .\venv\Scripts\activate
 
-
 pip install ipykernel
 
 C:\Users\Yannis\Downloads\edemm_earino\gewxwrika\proj3\venv\Scripts\python.exe -m pip install --upgrade pip
 
 pip install zarr
+
+pip install geopandas
+pip install matplotlib
+
+pip3 install torch torchvision torchaudio
+
+pip install numpy==1.24.1
