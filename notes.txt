@@ -6,7 +6,7 @@ files:
     dataset_creation.ipynb OK
         - contains dataset and dataloder trials
     
-    utils.py
+    utils.py OK
         - contains functions and stuff that were tried in dataset_creation.ipynb,
         are working and will also be used elsewhere
     
@@ -40,3 +40,9 @@ pip3 install torch torchvision torchaudio
 pip install numpy==1.24.1
 
 pip install scikit-learn
+
+
+##################################################################################
+##################################################################################
+
+έτσι όπως έχει κάνει ο Τσιρώνης το pad_sequences_collate_fn βάζει 0 στα pixels και 1 εκεί που δεν υπάρχουν

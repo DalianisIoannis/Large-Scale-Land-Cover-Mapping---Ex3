@@ -1,5 +1,10 @@
 import random
-from typing import List
+import copy
+import torch.nn as nn
+from torch.nn.utils.rnn import pad_sequence
+# from collections import defaultdict
+# from typing import List
+import math
 import zarr
 import numpy as np
 import torch
@@ -102,7 +107,7 @@ class PixelSetData(Dataset):
 
         self.samples = self._make_dataset()
 
-        for i in range(6):
+        for i in range(4):
             print(self.samples[i])
     
     def __getitem__(self, index):
@@ -123,6 +128,12 @@ class PixelSetData(Dataset):
         if self.transform is not None:
             sample = self.transform(sample)
         return sample
+    
+    # def get_shapes(self):
+    #     return [
+    #         (_, 10, zarr.load(parcel[0]).shape[-1])
+    #         for parcel in self.samples
+    #     ]
     
     def __len__(self):
         return len(self.samples)
@@ -182,6 +193,7 @@ def split_dict_train_test(data_dict, test_size=0.2, random_seed=42):
 ##################################################################################
 ##################################################################################
 
+# prwto prwto
 # def pad_sequences_collate_fn(samples: List[dict]) -> tuple:
 #     """
 #     Zero-pad (in front) each sample to enable batching. The longest
@@ -216,46 +228,375 @@ def split_dict_train_test(data_dict, test_size=0.2, random_seed=42):
 
 #     return data, labels, key_mask
 
-def pad_sequences_collate_fn(samples: List[dict]) -> tuple:
-    """
-    Zero-pad (in front) each sample to enable batching. The longest
-    sequence defines the sequence length for the batch.
-    """
-    # Extract labels
-    labels = torch.tensor([v['label_idx'] for v in samples])
+# merikes allages to panw
+# def pad_sequences_collate_fn(samples: List[dict]) -> tuple:
+#     """
+#     Zero-pad (in front) each sample to enable batching. The longest
+#     sequence defines the sequence length for the batch.
+#     """
+#     # Extract labels
+#     labels = torch.tensor([v['label_idx'] for v in samples])
     
-    # Find the maximum sequence length in the batch
-    max_len = max(v['pixels'].shape[-1] for v in samples)
+#     # Find the maximum sequence length in the batch
+#     max_len = max(v['pixels'].shape[-1] for v in samples)
     
-    # Pad sequences and create padding masks
-    padded_pixels = []
-    padding_masks = []
-    for sample in samples:
-        pixels = sample['pixels']  # Shape: [52, 10, SIZES]
-        seq_len = pixels.shape[-1]
-        pad_len = max_len - seq_len
+#     # Pad sequences and create padding masks
+#     padded_pixels = []
+#     padding_masks = []
+#     for sample in samples:
+#         pixels = sample['pixels']  # Shape: [52, 10, SIZES]
+#         seq_len = pixels.shape[-1]
+#         pad_len = max_len - seq_len
         
-        # Pad with zeros at the beginning of the last dimension
-        padded_pixel = torch.nn.functional.pad(pixels, (pad_len, 0))
-        padded_pixels.append(padded_pixel)
+#         # Pad with zeros at the beginning of the last dimension
+#         padded_pixel = torch.nn.functional.pad(pixels, (pad_len, 0))
+#         padded_pixels.append(padded_pixel)
         
-        # Create the padding mask
+#         # Create the padding mask
         
-        # padding_mask = torch.zeros(max_len, dtype=torch.bool)
-        # padding_mask = torch.zeros((pixels.shape[0], pixels.shape[1], max_len), dtype=torch.bool)
-        padding_mask = torch.zeros((pixels.shape[0], max_len), dtype=torch.bool)
+#         # padding_mask = torch.zeros(max_len, dtype=torch.bool)
+#         # padding_mask = torch.zeros((pixels.shape[0], pixels.shape[1], max_len), dtype=torch.bool)
+#         padding_mask = torch.zeros((pixels.shape[0], max_len), dtype=torch.bool)
         
-        # padding_mask[:pad_len] = True
-        # padding_mask[:, :, :pad_len] = True
-        padding_mask[:, :pad_len] = True
+#         # padding_mask[:pad_len] = True
+#         # padding_mask[:, :, :pad_len] = True
+#         padding_mask[:, :pad_len] = True
         
-        padding_masks.append(padding_mask)
+#         padding_masks.append(padding_mask)
     
-    # Stack the padded pixels and masks
-    data = torch.stack(padded_pixels, dim=0)
-    key_mask = torch.stack(padding_masks, dim=0)
+#     # Stack the padded pixels and masks
+#     data = torch.stack(padded_pixels, dim=0)
+#     key_mask = torch.stack(padding_masks, dim=0)
 
-    return data, labels, key_mask
+#     return data, labels, key_mask
+
+# apo nikola allagmeno tou tsironi
+def pad_sequences_collate_fn(samples) -> tuple:
+    """
+    Zero-pad (in front) each sample to enable batching.
+    The longest sequence defines the sequence length for the batch
+    """
+    # labels = torch.stack([torch.tensor(v[1]) for v in samples])
+    labels = torch.tensor([v['label_idx'] for v in samples])
+
+    # variable dimension must be first
+    # data = pad_sequence([v[0].permute((2, 0, 1)) for v in samples], batch_first=True)
+    data = pad_sequence([v['pixels'].permute((2, 0, 1)) for v in samples], batch_first=True)
+
+    key_mask = pad_sequence(
+        [
+            # torch.ones((v[0].shape[-1], v[0].shape[0]), dtype=torch.bool)
+            torch.ones((v['pixels'].shape[-1], v['pixels'].shape[0]), dtype=torch.bool)
+            for v in samples
+        ],
+        padding_value=False,
+        batch_first=True,
+    )
+
+    return data.permute((0, 2, 3, 1)), labels, key_mask.permute((0, 2, 1))
+
+##################################################################################
+##################################################################################
+
+class LinearLayer(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.linear = nn.Linear(in_dim, out_dim, bias=False)
+        self.norm = nn.BatchNorm1d(out_dim)
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+
+        # x = x.permute(0, 2, 1)
+
+        # x = (B, C) or (B, S, C)
+        x = self.linear(x)  # linear expect channels last
+        if x.dim() == 3:  
+            # BatchNorm1d expects channels first, move to (B, C, S)
+            x = self.norm(x.transpose(1, 2)).transpose(1, 2)
+        else:  # (B, C)
+            x = self.norm(x)
+        return self.activation(x)
+
+##################################################################################
+##################################################################################
+
+def masked_mean(x, mask):
+    
+    # print("input of masked_mean unique", x.unique())
+    # print("input of masked_mean shape", x.shape) # torch.Size([416, 32, 32])
+    # print("mask of masked_mean shape", mask.shape) # torch.Size([416, 32])
+    # print("mask of masked_mean uniques", mask.unique())
+    out = x.permute((1, 0, 2)) # torch.Size([32, 416, 32])
+    # print("mask.sum(dim=-1)", mask.sum(dim=-1))
+    out = out * mask # torch.Size([32, 416, 32])
+    # # here every pixel gets to be zero
+    # print("out = out * mask shape", out.shape)
+    # print("uniques of out = out * mask", out.unique())
+    out = out.sum(dim=-1) / mask.sum(dim=-1) # torch.Size([32, 416])
+    # print("out = out.sum(dim=-1) / mask.sum(dim=-1) shape", out.shape)
+    # print("uniques here", out.unique())
+    out = out.permute((1, 0))
+    # print("out of masked_mean unique", out.unique())
+    # print()
+    return out
+
+def masked_std(x, mask):
+    # print("input of masked_std unique", x.unique())
+    m = masked_mean(x, mask)
+
+    out = x.permute((2, 0, 1))
+    out = out - m
+    out = out.permute((2, 1, 0))
+
+    out = out * mask
+    d = mask.sum(dim=-1)
+    d[d == 1] = 2
+
+    out = (out ** 2).sum(dim=-1) / (d - 1)
+    out = torch.sqrt(out + 10e-32) # To ensure differentiability
+    out = out.permute(1, 0)
+    # print("out of masked_std unique", out.unique())
+    # print()
+    return out
+
+# pooling_methods = {
+#     "mean": masked_mean,
+#     "std": masked_std}
+
+##################################################################################
+##################################################################################
+
+class PixelSetEncoder(nn.Module):
+    def __init__(
+        self, input_dim,
+        mlp1=[10, 32, 64],
+        pooling="mean_std",
+        mlp2=[64, 128],
+    ):
+        """
+        Pixel-set encoder.
+        Args:
+            input_dim (int): Number of channels of the input tensors
+            mlp1 (list):  Dimensions of the successive feature spaces of MLP1
+            pooling (str): Pixel-embedding pooling strategy, can be chosen in ('mean','std','max,'min')
+                or any underscore-separated combination thereof.
+            mlp2 (list): Dimensions of the successive feature spaces of MLP2
+            with_extra (bool): Whether additional pre-computed features are passed between the two MLPs
+            extra_size (int, optional): Number of channels of the additional features, if any.
+        """
+
+        super(PixelSetEncoder, self).__init__()
+
+        self.input_dim = input_dim
+        self.mlp1_dim = copy.deepcopy(mlp1)
+        self.mlp2_dim = copy.deepcopy(mlp2)
+        self.pooling = pooling
+
+        self.pooling_methods = {
+            "mean": masked_mean,
+            "std": masked_std}
+
+        self.output_dim = (
+            input_dim * len(pooling.split("_"))
+            if len(self.mlp2_dim) == 0
+            else self.mlp2_dim[-1]
+        )
+
+        # inter_dim = self.mlp1_dim[-1] * len(pooling.split("_"))
+        # if self.with_extra:
+        #     inter_dim += self.extra_size
+        # assert input_dim == mlp1[0]
+        # assert inter_dim == mlp2[0]
+
+        # Feature extraction
+        layers = []
+        for i in range(len(self.mlp1_dim) - 1):
+            layers.append(LinearLayer(self.mlp1_dim[i], self.mlp1_dim[i + 1]))
+        self.mlp1 = nn.Sequential(*layers)
+
+        # MLP after pooling
+        layers = []
+        for i in range(len(self.mlp2_dim) - 1):
+            layers.append(LinearLayer(self.mlp2_dim[i], self.mlp2_dim[i + 1]))
+        self.mlp2 = nn.Sequential(*layers)
+
+    def forward(self, pixels, mask):
+        """
+        The input of the PSE is a tuple of tensors as yielded by the PixelSetData class:
+          (Pixel-Set, Pixel-Mask) or ((Pixel-Set, Pixel-Mask), Extra-features)
+        Pixel-Set : Batch_size x (Sequence length) x Channel x Number of pixels
+        Pixel-Mask : Batch_size x (Sequence length) x Number of pixels
+        Extra-features : Batch_size x (Sequence length) x Number of features
+
+        If the input tensors have a temporal dimension, it will be combined with the batch dimension so that the
+        complete sequences are processed at once. Then the temporal dimension is separated back to produce a tensor of
+        shape Batch_size x Sequence length x Embedding dimension
+        """
+        out = pixels
+
+        # print("pixels in PSE", out.shape)
+
+        batch, temp = out.shape[:2]
+
+        # out = out.view(batch * temp, *out.shape[2:]).transpose(1, 2)  # (B*T, S, C)
+        out = out.reshape(batch * temp, *out.shape[2:]).transpose(1, 2)  # (B*T, S, C)
+        
+        # mask = mask.view(batch * temp, -1)
+        mask = mask.reshape(batch * temp, -1)
+
+        out = self.mlp1(out).transpose(1, 2)
+
+        # print("in pse out mask uniques", mask.unique())
+        # print("in pse out mask uniques type", type(mask.unique()))
+        
+        # if not torch.equal(mask.unique(), torch.tensor([False])):
+        out = torch.cat(
+            # [pooling_methods[n](out, mask) for n in self.pooling.split("_")], dim=1
+            [self.pooling_methods[n](out, mask) for n in self.pooling.split("_")], dim=1
+        )
+        # else:
+        #     out = torch.cat(
+        #         [out.mean(dim=-1), out.std(dim=-1)], dim=1
+        #     )
+
+        out = self.mlp2(out)
+        out = out.view(batch, temp, -1)
+        return out
+    
+##################################################################################
+##################################################################################
+
+class PositionalEncoding(nn.Module):
+    def __init__(self,
+                 d_model: int,
+                #  dropout: float = 0.1,
+                #  max_len: int = 5000
+                 max_len: int = 52
+                 ):
+        super(PositionalEncoding, self).__init__()
+        
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+            )
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+    
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return x
+
+##################################################################################
+##################################################################################
+
+# from torch.nn import TransformerEncoder, TransformerEncoderLayer
+# class TimeSeriesTransformer(nn.Module):
+#     def __init__(self,
+#                  feature_size,
+#                  num_classes: int = 7,
+#                  num_layers=3, num_heads=8,
+#                 #  hidden_dim=512, dropout=0.1
+#                  ):
+#         super(TimeSeriesTransformer, self).__init__()
+        
+#         self.pos_encoder = PositionalEncoding(feature_size)
+#         self.encoder_layers = TransformerEncoderLayer(
+#             d_model=feature_size, nhead=num_heads,
+#             # dim_feedforward=hidden_dim,
+#             # dropout=dropout,
+#             batch_first=True
+#             )
+#         self.transformer_encoder = TransformerEncoder(self.encoder_layers, num_layers)
+        
+#         self.classification_token = nn.Parameter(torch.zeros(1, 1, feature_size),
+#                                                  requires_grad=True
+#                                                  )
+#         self.fc = nn.Linear(feature_size, num_classes)  # Adjust the output dimension as needed
+        
+#     def forward(self,
+#                 x: torch.Tensor,
+#                 ) -> torch.Tensor:
+#         """
+#         Arguments:
+#             x: Tensor, shape ``[batch_size, seq_len, embedding_dim]``
+#         """
+#         batch_size, seq_len, feature_size = x.size()
+        
+#         x = self.pos_encoder(x)  # BS x T x d_model
+
+#         # Add classification token
+#         cls_tokens = self.classification_token.expand(batch_size, -1, -1)
+
+#         x = torch.cat((cls_tokens, x), dim=1)  # [batch_size, seq_len + 1, feature_size]
+        
+#         # # Add positional encoding and permute for Transformer [seq_len + 1, batch_size, feature_size]
+#         # x = self.pos_encoder(x.permute(1, 0, 2))
+
+#         x = self.transformer_encoder(x)  # Pass through the transformer encoder
+#         # x = x[0, :, :]  # Extract the classification token output
+
+#         # from Tsironis
+#         # x = x[:, 0, :]  # BS x d_model
+        
+#         x = self.fc(x)  # Final classification layer
+#         # return x.squeeze()  # Adjust based on the output needs
+#         return x
+
+class TimeSeriesTransformer(nn.Module):
+    def __init__(self, d_model: int = 128):
+        super().__init__()
+
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer=nn.TransformerEncoderLayer(
+                d_model=d_model, nhead=8, batch_first=True
+            ),
+            num_layers=3,
+        )
+
+        self.cls_tkn = nn.Parameter(torch.rand(1, 1, d_model), requires_grad=True)
+
+        self.pos_emb = PositionalEncoding(d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Arguments:
+            x: Tensor, shape [batch_size, seq_len, embedding_dim]
+        """
+        # BS x T x 128
+        x = self.pos_emb(x)  # BS x T x d_model
+
+        cls_tkn = self.cls_tkn.expand(x.shape[0], -1, -1)  # BS x 1 x d_model
+        x = torch.cat([cls_tkn, x], dim=1)  # BS x (T+1) x d_model
+
+        x = self.encoder(x)  # BS x (T+1) x d_model
+
+        x = x[:, 0, :]  # BS x d_model
+        
+        return x
+
+##################################################################################
+##################################################################################
+
+class SimpleMLP(nn.Module):
+    def __init__(self,
+                 input_dim,
+                 output_dim: int = 7):
+        super(SimpleMLP, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(input_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, output_dim),
+        )
+    
+    def forward(self, x):
+        x = self.fc(x)
+        return x
 
 ##################################################################################
 ##################################################################################
