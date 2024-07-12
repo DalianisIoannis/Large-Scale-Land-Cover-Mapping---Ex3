@@ -1,4 +1,21 @@
 
+files:
+    data_exploration.ipynb OK
+        - contains info about data and metadata just for exploration
+    
+    dataset_creation.ipynb OK
+        - contains dataset and dataloder trials
+    
+    utils.py
+        - contains functions and stuff that were tried in dataset_creation.ipynb,
+        are working and will also be used elsewhere
+    
+
+##################################################################################
+##################################################################################
+
+pip freeze > requirements.txt
+pip uninstall -r requirements.txt -y
 
 python -m venv C:\Users\Yannis\Downloads\edemm_earino\gewxwrika\proj3\venv
 python -m venv C:\Users\yanni\Downloads\gewxwrika3\venv
@@ -15,9 +32,11 @@ C:\Users\Yannis\Downloads\edemm_earino\gewxwrika\proj3\venv\Scripts\python.exe -
 
 pip install zarr
 
-pip install geopandas
+NOT pip install geopandas
 pip install matplotlib
 
 pip3 install torch torchvision torchaudio
 
 pip install numpy==1.24.1
+
+pip install scikit-learn
