@@ -1,12 +1,12 @@
 
 files:
-    data_exploration.ipynb OK
+    data_exploration.ipynb
         - contains info about data and metadata just for exploration
     
-    dataset_creation.ipynb OK
+    dataset_creation.ipynb
         - contains dataset and dataloder trials
     
-    utils.py OK
+    utils.py
         - contains functions and stuff that were tried in dataset_creation.ipynb,
         are working and will also be used elsewhere
     
@@ -27,22 +27,21 @@ Set-ExecutionPolicy Restricted
 .\venv\Scripts\activate
 
 pip install ipykernel
-
 C:\Users\Yannis\Downloads\edemm_earino\gewxwrika\proj3\venv\Scripts\python.exe -m pip install --upgrade pip
-
 pip install zarr
 
 NOT pip install geopandas
+
 pip install matplotlib
-
 pip3 install torch torchvision torchaudio
-
 pip install numpy==1.24.1
-
 pip install scikit-learn
-
+pip install torchmetrics
 
 ##################################################################################
 ##################################################################################
 
-έτσι όπως έχει κάνει ο Τσιρώνης το pad_sequences_collate_fn βάζει 0 στα pixels και 1 εκεί που δεν υπάρχουν
+έτσι όπως έχει κάνει ο Τσιρώνης το pad_sequences_collate_fn βάζει 0 στα pixels και 1 εκεί που δεν
+υπάρχουν
+
+gewxwrika-python-utils

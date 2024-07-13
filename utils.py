@@ -2,8 +2,8 @@ import random
 import copy
 import torch.nn as nn
 from torch.nn.utils.rnn import pad_sequence
-# from collections import defaultdict
-# from typing import List
+import torchmetrics
+import matplotlib.pyplot as plt
 import math
 import zarr
 import numpy as np
@@ -35,19 +35,19 @@ class RandomSamplePixels(object):
         if S > self.num_pixels:
             indices = random.sample(range(S), self.num_pixels)
             x = pixels[:, :, indices]
-            valid_pixels = np.ones(self.num_pixels)
+            # valid_pixels = np.ones(self.num_pixels)
         elif S < self.num_pixels:
             x = np.zeros((T, C, self.num_pixels))
             x[..., :S] = pixels
             x[..., S:] = np.stack([x[:, :, 0] for _ in range(S, self.num_pixels)], axis=-1)
-            valid_pixels = np.array([1 for _ in range(S)] + [0 for _ in range(S, self.num_pixels)])
+            # valid_pixels = np.array([1 for _ in range(S)] + [0 for _ in range(S, self.num_pixels)])
         else:
             x = pixels
-            valid_pixels = np.ones(self.num_pixels)
+            # valid_pixels = np.ones(self.num_pixels)
         # Repeat valid_pixels across time
-        valid_pixels = np.repeat(valid_pixels[np.newaxis].astype(np.float32), x.shape[0], axis=0)
+        # valid_pixels = np.repeat(valid_pixels[np.newaxis].astype(np.float32), x.shape[0], axis=0)
         sample['pixels'] = x
-        sample['valid_pixels'] = valid_pixels
+        # sample['valid_pixels'] = valid_pixels
         return sample
 
 ##################################################################################
@@ -60,14 +60,6 @@ class Normalize(object):
         """max_pixel_value (int): Max value of pixels to move pixels to [0, 1]"""
         self.max_pixel_value = max_pixel_value
 
-        # approximate max values
-        max_parcel_box_m = 10000
-        max_perimeter = max_parcel_box_m * 4
-        max_area = max_parcel_box_m ** 2
-        max_perimeter_area_ratio = max_perimeter
-        max_cover_ratio = 1.0
-        self.max_extra_values = np.array([max_perimeter, max_area, max_perimeter_area_ratio, max_cover_ratio])
-
     def __call__(self, sample):
         sample['pixels'] = np.clip(sample['pixels'], 0, self.max_pixel_value).astype(np.float32) / self.max_pixel_value
         return sample
@@ -76,9 +68,10 @@ class Normalize(object):
 ##################################################################################
 
 class ToTensor(object):
+    """Convert ndarrays in sample to Tensors."""
     def __call__(self, sample):
         sample['pixels'] = torch.from_numpy(sample['pixels'].astype(np.float32))
-        sample['valid_pixels'] = torch.from_numpy(sample['valid_pixels'].astype(np.float32))
+        # sample['valid_pixels'] = torch.from_numpy(sample['valid_pixels'].astype(np.float32))
         if isinstance(sample['label'], int):
             sample['label'] = torch.tensor(sample['label']).long()
         return sample
@@ -87,11 +80,10 @@ class ToTensor(object):
 ##################################################################################
 
 class PixelSetData(Dataset):
+    """Dataset class for PixelSet data"""
     def __init__(
-            self,
-            data_root,
-            class_to_idx,
-            true_labels,
+            self, data_root,
+            class_to_idx, true_labels,
             transform=None,
             ):
         
@@ -104,11 +96,10 @@ class PixelSetData(Dataset):
         self.transform = transform
         self.class_to_idx = class_to_idx
         # self.idx_to_class = {v: k for k, v in self.class_to_idx.items()}
-
         self.samples = self._make_dataset()
 
-        for i in range(4):
-            print(self.samples[i])
+        # for i in range(4):
+        #     print(self.samples[i])
     
     def __getitem__(self, index):
         # get item like timematch
@@ -119,8 +110,8 @@ class PixelSetData(Dataset):
             "index": index,
             # "parcel_index": parcel_idx,  # mapping to metadata
             "pixels": pixels,
-            "valid_pixels": np.ones(
-                (pixels.shape[0], pixels.shape[-1]), dtype=np.float32),
+            # "valid_pixels": np.ones(
+            #     (pixels.shape[0], pixels.shape[-1]), dtype=np.float32),
             "label": y,
             "label_idx": self.class_to_idx[y],
         }
@@ -129,16 +120,11 @@ class PixelSetData(Dataset):
             sample = self.transform(sample)
         return sample
     
-    # def get_shapes(self):
-    #     return [
-    #         (_, 10, zarr.load(parcel[0]).shape[-1])
-    #         for parcel in self.samples
-    #     ]
-    
     def __len__(self):
         return len(self.samples)
     
     def _make_dataset(self):
+        """Returns list of tuples (path, parcel_idx, label)"""
         # metadata = pkl.load(open(os.path.join(self.meta_folder, "metadata.pkl"), "rb"))
         instances = []
         
@@ -158,13 +144,13 @@ class PixelSetData(Dataset):
 ##################################################################################
 ##################################################################################
 
-def split_dict_train_test(data_dict, test_size=0.2, random_seed=42):
+def split_dict_train_test(data_dict, test_size=0.05, val_size=0.2, random_seed=42):
     """
-    Splits a dictionary of data into train and test sets based on the
-    specified test_size and random_seed. The dictionary is assumed to
-    contain integer keys and values. The function returns two dictionaries,
+    Splits a dictionary of data into train, validation, and test sets based on the
+    specified test_size, val_size, and random_seed. The dictionary is assumed to
+    contain integer keys and values. The function returns three dictionaries,
     where all the label categories are divided so that they correspond to
-    the train and test size.
+    the train, validation, and test sizes.
     """
     # Set the random seed for reproducibility
     random.seed(random_seed)
@@ -176,59 +162,27 @@ def split_dict_train_test(data_dict, test_size=0.2, random_seed=42):
             class_to_indices[label] = []
         class_to_indices[label].append(idx)
     
-    # Split indices into train and test sets
+    # Split indices into train, validation, and test sets
     train_indices = []
+    val_indices = []
     test_indices = []
     for indices in class_to_indices.values():
-        train_idx, test_idx = train_test_split(indices, test_size=test_size, random_state=random_seed)
+        train_idx, temp_idx = train_test_split(indices, test_size=test_size + val_size, random_state=random_seed)
+        val_idx, test_idx = train_test_split(temp_idx, test_size=test_size / (test_size + val_size), random_state=random_seed)
         train_indices.extend(train_idx)
+        val_indices.extend(val_idx)
         test_indices.extend(test_idx)
     
-    # Create train and test dictionaries
+    # Create train, validation, and test dictionaries
     train_dict = {idx: data_dict[idx] for idx in train_indices}
+    val_dict = {idx: data_dict[idx] for idx in val_indices}
     test_dict = {idx: data_dict[idx] for idx in test_indices}
     
-    return train_dict, test_dict
+    return train_dict, val_dict, test_dict
 
 ##################################################################################
 ##################################################################################
 
-# prwto prwto
-# def pad_sequences_collate_fn(samples: List[dict]) -> tuple:
-#     """
-#     Zero-pad (in front) each sample to enable batching. The longest
-#     sequence defines the sequence length for the batch.
-#     """
-#     # Extract labels
-#     labels = torch.tensor([v['label_idx'] for v in samples])
-    
-#     # Find the maximum sequence length in the batch
-#     max_len = max(v['pixels'].shape[-1] for v in samples)
-    
-#     # Pad sequences and create padding masks
-#     padded_pixels = []
-#     padding_masks = []
-#     for sample in samples:
-#         pixels = sample['pixels']
-#         seq_len = pixels.shape[-1]
-#         pad_len = max_len - seq_len
-        
-#         # Pad with zeros at the beginning
-#         padded_pixel = torch.nn.functional.pad(pixels, (pad_len, 0))
-#         padded_pixels.append(padded_pixel)
-        
-#         # Create the padding mask
-#         padding_mask = torch.zeros(max_len, dtype=torch.bool)
-#         padding_mask[:pad_len] = True
-#         padding_masks.append(padding_mask)
-    
-#     # Stack the padded pixels and masks
-#     data = torch.stack(padded_pixels, dim=0)
-#     key_mask = torch.stack(padding_masks, dim=0)
-
-#     return data, labels, key_mask
-
-# merikes allages to panw
 # def pad_sequences_collate_fn(samples: List[dict]) -> tuple:
 #     """
 #     Zero-pad (in front) each sample to enable batching. The longest
@@ -270,22 +224,19 @@ def split_dict_train_test(data_dict, test_size=0.2, random_seed=42):
 
 #     return data, labels, key_mask
 
-# apo nikola allagmeno tou tsironi
+# from lesson Lab 4
 def pad_sequences_collate_fn(samples) -> tuple:
     """
     Zero-pad (in front) each sample to enable batching.
     The longest sequence defines the sequence length for the batch
     """
-    # labels = torch.stack([torch.tensor(v[1]) for v in samples])
     labels = torch.tensor([v['label_idx'] for v in samples])
 
     # variable dimension must be first
-    # data = pad_sequence([v[0].permute((2, 0, 1)) for v in samples], batch_first=True)
     data = pad_sequence([v['pixels'].permute((2, 0, 1)) for v in samples], batch_first=True)
 
     key_mask = pad_sequence(
         [
-            # torch.ones((v[0].shape[-1], v[0].shape[0]), dtype=torch.bool)
             torch.ones((v['pixels'].shape[-1], v['pixels'].shape[0]), dtype=torch.bool)
             for v in samples
         ],
@@ -322,47 +273,24 @@ class LinearLayer(nn.Module):
 ##################################################################################
 
 def masked_mean(x, mask):
-    
-    # print("input of masked_mean unique", x.unique())
-    # print("input of masked_mean shape", x.shape) # torch.Size([416, 32, 32])
-    # print("mask of masked_mean shape", mask.shape) # torch.Size([416, 32])
-    # print("mask of masked_mean uniques", mask.unique())
     out = x.permute((1, 0, 2)) # torch.Size([32, 416, 32])
-    # print("mask.sum(dim=-1)", mask.sum(dim=-1))
     out = out * mask # torch.Size([32, 416, 32])
-    # # here every pixel gets to be zero
-    # print("out = out * mask shape", out.shape)
-    # print("uniques of out = out * mask", out.unique())
     out = out.sum(dim=-1) / mask.sum(dim=-1) # torch.Size([32, 416])
-    # print("out = out.sum(dim=-1) / mask.sum(dim=-1) shape", out.shape)
-    # print("uniques here", out.unique())
     out = out.permute((1, 0))
-    # print("out of masked_mean unique", out.unique())
-    # print()
     return out
 
 def masked_std(x, mask):
-    # print("input of masked_std unique", x.unique())
     m = masked_mean(x, mask)
-
     out = x.permute((2, 0, 1))
     out = out - m
     out = out.permute((2, 1, 0))
-
     out = out * mask
     d = mask.sum(dim=-1)
     d[d == 1] = 2
-
     out = (out ** 2).sum(dim=-1) / (d - 1)
     out = torch.sqrt(out + 10e-32) # To ensure differentiability
     out = out.permute(1, 0)
-    # print("out of masked_std unique", out.unique())
-    # print()
     return out
-
-# pooling_methods = {
-#     "mean": masked_mean,
-#     "std": masked_std}
 
 ##################################################################################
 ##################################################################################
@@ -403,12 +331,6 @@ class PixelSetEncoder(nn.Module):
             else self.mlp2_dim[-1]
         )
 
-        # inter_dim = self.mlp1_dim[-1] * len(pooling.split("_"))
-        # if self.with_extra:
-        #     inter_dim += self.extra_size
-        # assert input_dim == mlp1[0]
-        # assert inter_dim == mlp2[0]
-
         # Feature extraction
         layers = []
         for i in range(len(self.mlp1_dim) - 1):
@@ -435,8 +357,6 @@ class PixelSetEncoder(nn.Module):
         """
         out = pixels
 
-        # print("pixels in PSE", out.shape)
-
         batch, temp = out.shape[:2]
 
         # out = out.view(batch * temp, *out.shape[2:]).transpose(1, 2)  # (B*T, S, C)
@@ -447,18 +367,9 @@ class PixelSetEncoder(nn.Module):
 
         out = self.mlp1(out).transpose(1, 2)
 
-        # print("in pse out mask uniques", mask.unique())
-        # print("in pse out mask uniques type", type(mask.unique()))
-        
-        # if not torch.equal(mask.unique(), torch.tensor([False])):
         out = torch.cat(
-            # [pooling_methods[n](out, mask) for n in self.pooling.split("_")], dim=1
             [self.pooling_methods[n](out, mask) for n in self.pooling.split("_")], dim=1
         )
-        # else:
-        #     out = torch.cat(
-        #         [out.mean(dim=-1), out.std(dim=-1)], dim=1
-        #     )
 
         out = self.mlp2(out)
         out = out.view(batch, temp, -1)
@@ -467,86 +378,59 @@ class PixelSetEncoder(nn.Module):
 ##################################################################################
 ##################################################################################
 
-class PositionalEncoding(nn.Module):
-    def __init__(self,
-                 d_model: int,
-                #  dropout: float = 0.1,
-                #  max_len: int = 5000
-                 max_len: int = 52
-                 ):
-        super(PositionalEncoding, self).__init__()
-        
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
-            )
-        
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        
-        pe = pe.unsqueeze(0).transpose(0, 1)
-        self.register_buffer('pe', pe)
-    
-    def forward(self, x):
-        x = x + self.pe[:x.size(0), :]
-        return x
-
-##################################################################################
-##################################################################################
-
-# from torch.nn import TransformerEncoder, TransformerEncoderLayer
-# class TimeSeriesTransformer(nn.Module):
+# class PositionalEncoding(nn.Module):
 #     def __init__(self,
-#                  feature_size,
-#                  num_classes: int = 7,
-#                  num_layers=3, num_heads=8,
-#                 #  hidden_dim=512, dropout=0.1
+#                  d_model: int,
+#                 #  dropout: float = 0.1,
+#                 #  max_len: int = 5000
+#                  max_len: int = 52
 #                  ):
-#         super(TimeSeriesTransformer, self).__init__()
+#         super(PositionalEncoding, self).__init__()
         
-#         self.pos_encoder = PositionalEncoding(feature_size)
-#         self.encoder_layers = TransformerEncoderLayer(
-#             d_model=feature_size, nhead=num_heads,
-#             # dim_feedforward=hidden_dim,
-#             # dropout=dropout,
-#             batch_first=True
+#         pe = torch.zeros(max_len, d_model)
+#         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+#         div_term = torch.exp(
+#             torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
 #             )
-#         self.transformer_encoder = TransformerEncoder(self.encoder_layers, num_layers)
         
-#         self.classification_token = nn.Parameter(torch.zeros(1, 1, feature_size),
-#                                                  requires_grad=True
-#                                                  )
-#         self.fc = nn.Linear(feature_size, num_classes)  # Adjust the output dimension as needed
+#         pe[:, 0::2] = torch.sin(position * div_term)
+#         pe[:, 1::2] = torch.cos(position * div_term)
         
-#     def forward(self,
-#                 x: torch.Tensor,
-#                 ) -> torch.Tensor:
-#         """
-#         Arguments:
-#             x: Tensor, shape ``[batch_size, seq_len, embedding_dim]``
-#         """
-#         batch_size, seq_len, feature_size = x.size()
-        
-#         x = self.pos_encoder(x)  # BS x T x d_model
-
-#         # Add classification token
-#         cls_tokens = self.classification_token.expand(batch_size, -1, -1)
-
-#         x = torch.cat((cls_tokens, x), dim=1)  # [batch_size, seq_len + 1, feature_size]
-        
-#         # # Add positional encoding and permute for Transformer [seq_len + 1, batch_size, feature_size]
-#         # x = self.pos_encoder(x.permute(1, 0, 2))
-
-#         x = self.transformer_encoder(x)  # Pass through the transformer encoder
-#         # x = x[0, :, :]  # Extract the classification token output
-
-#         # from Tsironis
-#         # x = x[:, 0, :]  # BS x d_model
-        
-#         x = self.fc(x)  # Final classification layer
-#         # return x.squeeze()  # Adjust based on the output needs
+#         pe = pe.unsqueeze(0).transpose(0, 1)
+#         self.register_buffer('pe', pe)
+    
+#     def forward(self, x):
+#         x = x + self.pe[:x.size(0), :]
 #         return x
+
+# from lesson lab 4
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 52):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        pe[0, :, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Arguments:
+            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
+        """
+        pe = self.pe[:, : x.size(1)].expand(x.shape[0], -1, -1)
+
+        x = x + pe
+        return self.dropout(x)
+
+##################################################################################
+##################################################################################
 
 class TimeSeriesTransformer(nn.Module):
     def __init__(self, d_model: int = 128):
@@ -597,6 +481,190 @@ class SimpleMLP(nn.Module):
     def forward(self, x):
         x = self.fc(x)
         return x
+
+##################################################################################
+##################################################################################
+
+def trainer_function(model, num_classes, train_dloader, val_dloader, device, num_epochs=9):
+    """Train the model: Returns train and validation last losses and accuracies"""
+    
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
+    
+    # Initialize metrics
+    f1_micro = torchmetrics.F1Score(task="multiclass", average='micro', num_classes=num_classes).to(device)
+    f1_weighted = torchmetrics.F1Score(task="multiclass", average='weighted', num_classes=num_classes).to(device)
+    accuracy = torchmetrics.Accuracy(task="multiclass", num_classes=num_classes).to(device)
+    precision = torchmetrics.Precision(task="multiclass", average='micro', num_classes=num_classes).to(device)
+    recall = torchmetrics.Recall(task="multiclass", average='micro', num_classes=num_classes).to(device)
+    confusion_matrix = torchmetrics.ConfusionMatrix(task="multiclass", num_classes=num_classes).to(device)
+
+    # Lists to store metrics for plotting
+    train_losses = []
+    train_accuracies = []
+    train_f1_micros = []
+    train_f1_weighteds = []
+    train_precisions = []
+    train_recalls = []
+
+    val_losses = []
+    val_accuracies = []
+    val_f1_micros = []
+    val_f1_weighteds = []
+    val_precisions = []
+    val_recalls = []
+
+    for epoch in range(num_epochs):
+        print(f'Epoch {epoch}/{num_epochs - 1}')
+        print('-' * 10)
+
+        model.train(True)
+
+        running_loss = 0.0
+        running_corrects = 0
+
+        # Reset metrics
+        f1_micro.reset()
+        f1_weighted.reset()
+        accuracy.reset()
+        precision.reset()
+        recall.reset()
+        confusion_matrix.reset()
+
+        for batch in train_dloader:
+            input_tensor = batch[0].to(device)
+            labels = batch[1].to(device)
+            mask = batch[2].to(device)
+
+            out = model(input_tensor, mask)
+            loss = criterion(out, labels)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item() * input_tensor.size(0)
+            _, preds = torch.max(out, 1)
+            running_corrects += torch.sum(preds == labels.data)
+
+            # Update metrics
+            f1_micro.update(preds, labels)
+            f1_weighted.update(preds, labels)
+            accuracy.update(preds, labels)
+            precision.update(preds, labels)
+            recall.update(preds, labels)
+            confusion_matrix.update(preds, labels)
+
+        epoch_loss = running_loss / len(train_dloader.dataset)
+        epoch_acc = accuracy.compute().item()
+        epoch_f1_micro = f1_micro.compute().item()
+        epoch_f1_weighted = f1_weighted.compute().item()
+
+        print(f'Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
+        print(f'F1 Micro: {epoch_f1_micro:.4f} F1 Weighted: {epoch_f1_weighted:.4f}')
+        print(f'Precision: {precision.compute().item():.4f} Recall: {recall.compute().item():.4f}')
+        print(f'Confusion Matrix:\n{confusion_matrix.compute()}')
+
+        # Store metrics for plotting
+        train_losses.append(epoch_loss)
+        train_accuracies.append(epoch_acc)
+        train_f1_micros.append(epoch_f1_micro)
+        train_f1_weighteds.append(epoch_f1_weighted)
+        train_precisions.append(precision.compute().item())
+        train_recalls.append(recall.compute().item())
+
+        # Validation phase
+        model.eval()
+        val_running_loss = 0.0
+        val_running_corrects = 0
+
+        # Reset metrics
+        f1_micro.reset()
+        f1_weighted.reset()
+        accuracy.reset()
+        precision.reset()
+        recall.reset()
+        confusion_matrix.reset()
+
+        with torch.no_grad():
+            for batch in val_dloader:
+                input_tensor = batch[0].to(device)
+                labels = batch[1].to(device)
+                mask = batch[2].to(device)
+
+                out = model(input_tensor, mask)
+                
+                loss = criterion(out, labels)
+
+                val_running_loss += loss.item() * input_tensor.size(0)
+                _, preds = torch.max(out, 1)
+                val_running_corrects += torch.sum(preds == labels.data)
+
+                # Update metrics
+                f1_micro.update(preds, labels)
+                f1_weighted.update(preds, labels)
+                accuracy.update(preds, labels)
+                precision.update(preds, labels)
+                recall.update(preds, labels)
+                confusion_matrix.update(preds, labels)
+
+        val_epoch_loss = val_running_loss / len(val_dloader.dataset)
+        val_epoch_acc = accuracy.compute().item()
+        val_epoch_f1_micro = f1_micro.compute().item()
+        val_epoch_f1_weighted = f1_weighted.compute().item()
+
+        print(f'Validation Loss: {val_epoch_loss:.4f} Acc: {val_epoch_acc:.4f}')
+        print(f'Validation F1 Micro: {val_epoch_f1_micro:.4f} F1 Weighted: {val_epoch_f1_weighted:.4f}')
+        print(f'Validation Precision: {precision.compute().item():.4f} Recall: {recall.compute().item():.4f}')
+        print(f'Validation Confusion Matrix:\n{confusion_matrix.compute()}')
+
+        # Store metrics for plotting
+        val_losses.append(val_epoch_loss)
+        val_accuracies.append(val_epoch_acc)
+        val_f1_micros.append(val_epoch_f1_micro)
+        val_f1_weighteds.append(val_epoch_f1_weighted)
+        val_precisions.append(precision.compute().item())
+        val_recalls.append(recall.compute().item())
+
+    # Plot metrics
+    epochs = range(num_epochs)
+    plt.figure(figsize=(12, 8))
+
+    plt.subplot(2, 2, 1)
+    plt.plot(epochs, train_losses, label='Training Loss')
+    plt.plot(epochs, val_losses, label='Validation Loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+
+    plt.subplot(2, 2, 2)
+    plt.plot(epochs, train_accuracies, label='Training Accuracy')
+    plt.plot(epochs, val_accuracies, label='Validation Accuracy')
+    plt.xlabel('Epochs')
+    plt.ylabel('Accuracy')
+    plt.legend()
+
+    plt.subplot(2, 2, 3)
+    plt.plot(epochs, train_f1_micros, label='Training F1 Micro')
+    plt.plot(epochs, val_f1_micros, label='Validation F1 Micro')
+    plt.xlabel('Epochs')
+    plt.ylabel('F1 Micro')
+    plt.legend()
+
+    plt.subplot(2, 2, 4)
+    plt.plot(epochs, train_f1_weighteds, label='Training F1 Weighted')
+    plt.plot(epochs, val_f1_weighteds, label='Validation F1 Weighted')
+    plt.xlabel('Epochs')
+    plt.ylabel('F1 Weighted')
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+    return train_losses[-1], train_accuracies[-1], train_f1_micros[-1], train_f1_weighteds[-1],\
+        val_losses[-1], val_accuracies[-1], val_f1_micros[-1], val_f1_weighteds[-1],\
+        train_precisions[-1], train_recalls[-1], val_precisions[-1], val_recalls[-1]
+        
 
 ##################################################################################
 ##################################################################################
