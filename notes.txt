@@ -38,6 +38,10 @@ pip install numpy==1.24.1
 pip install scikit-learn
 pip install torchmetrics
 
+# only for print trial in dataset dataset_creation
+pip install natsort
+
+
 ##################################################################################
 ##################################################################################
 
